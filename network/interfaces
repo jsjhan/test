@@ -1,0 +1,126 @@
+# This file describes the network interfaces available on your system
+# and how to activate them. For more information, see interfaces(5).
+
+# The loopback network interface
+auto lo
+iface lo inet loopback
+
+auto eth0
+iface eth0 inet dhcp
+
+
+auto eth1
+iface eth1 inet static
+	address 192.168.67.216
+	netmask 255.255.255.0
+
+
+
+allow-ovs br0
+iface br0 inet manual
+    ovs_type OVSBridge
+    ovs_ports br0_1 br0_3 ovs-server
+    ovs_extra set-fail-mode ${IFACE} standalone -- set bridge ${IFACE} other-config:disable-in-band=true -- set bridge ${IFACE} protocols=OpenFlow13  -- set-controller ${IFACE} "tcp:192.168.67.5:6653"
+
+
+allow-ovs br1
+iface br1 inet manual
+    ovs_type OVSBridge
+    ovs_ports br1_2 br1_0 br1_3
+    ovs_extra set-fail-mode ${IFACE} standalone -- set bridge ${IFACE} other-config:disable-in-band=true -- set bridge ${IFACE} protocols=OpenFlow13  -- set-controller ${IFACE} "tcp:192.168.67.5:6653"
+
+allow-ovs br2
+iface br2 inet manual
+    ovs_type OVSBridge
+    ovs_ports br2_1 br2_3 ovs-client
+    ovs_extra set-fail-mode ${IFACE} standalone -- set bridge ${IFACE} other-config:disable-in-band=true -- set bridge ${IFACE} protocols=OpenFlow13 -- set-controller ${IFACE} "tcp:192.168.67.5:6653"
+
+allow-ovs br3
+iface br3 inet manual
+    ovs_type OVSBridge
+    ovs_ports br3_0 br3_2 br3_1
+    ovs_extra set-fail-mode ${IFACE} standalone -- set bridge ${IFACE} other-config:disable-in-band=true -- set bridge ${IFACE} protocols=OpenFlow13 -- set-controller ${IFACE} "tcp:192.168.67.5:6653"
+
+
+
+allow-br0 ovs-server
+iface ovs-server inet manual
+        ovs_type OVSPort
+        ovs_bridge br0
+        up ifconfig $IFACE 0.0.0.0 up
+        up ip link set $IFACE promisc on
+        down ip link set $IFACE promisc off
+        down ifconfig $IFACE down
+
+allow-br2 ovs-client
+iface ovs-client inet manual
+        ovs_type OVSPort
+        ovs_bridge br2
+        up ifconfig $IFACE 0.0.0.0 up
+        up ip link set $IFACE promisc on
+        down ip link set $IFACE promisc off
+        down ifconfig $IFACE down
+
+allow-br0 br0_3
+iface br0_3 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br0
+        ovs_patch_peer br3_0
+
+allow-br3 br3_0
+iface br3_0 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br3
+        ovs_patch_peer br0_3
+
+allow-br3 br3_2
+iface br3_2 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br3
+        ovs_patch_peer br2_3
+
+allow-br2 br2_3
+iface br2_3 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br2
+        ovs_patch_peer br3_2
+
+
+allow-br1 br1_2
+iface br1_2 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br1
+	ovs_patch_peer br2_1
+
+allow-br2 br2_1
+iface br2_1 inet manual
+	ovs_type OVSPatchPort
+        ovs_bridge br2
+        ovs_patch_peer br1_2
+
+allow-br0 br0_1
+iface br0_1 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br0
+        ovs_patch_peer br1_0
+
+
+allow-br1 br1_0
+iface br1_0 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br1
+        ovs_patch_peer br0_1
+
+allow-br1 br1_3
+iface br1_3 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br1
+        ovs_patch_peer br3_1
+
+allow-br3 br3_1
+iface br3_1 inet manual
+        ovs_type OVSPatchPort
+        ovs_bridge br3
+        ovs_patch_peer br1_3
+
+
