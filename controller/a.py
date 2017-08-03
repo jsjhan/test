@@ -2,6 +2,7 @@ from ryu.base import app_manager
 from ryu.controller import ofp_event
 from ryu.controller.handler import CONFIG_DISPATCHER, MAIN_DISPATCHER
 from ryu.controller.handler import set_ev_cls
+from ryu.ofproto import ofproto_v1_0
 from ryu.ofproto import ofproto_v1_3
 from ryu.ofproto import ofproto_parser
 from ryu.ofproto import ofproto_protocol
@@ -16,6 +17,7 @@ from ryu.lib.packet import icmp
 from ryu.lib.packet import vrrp
 from ryu.lib.packet import in_proto
 from ryu.controller import handler
+from ryu.lib.mac import haddr_to_bin
 import base64
 import random
 import time
@@ -211,11 +213,18 @@ def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,pa
     if msg_type == ofproto.OFPT_FLOW_MOD:
         #print 'ofp flow mod'
         match = parser.OFPMatch()
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,
-                                          ofproto.OFPCML_NO_BUFFER)]
-        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,
-                                             actions)]
-        payload = parser.OFPFlowMod(desc,priority=0,match=match,instructions=inst)
+        #openflow1.3
+        #actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,ofproto.OFPCML_NO_BUFFER)]
+        #openflow1.0
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
+        
+        #openflow1.3
+        #inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,actions)]
+        #payload = parser.OFPFlowMod(desc,priority=0,match=match,instructions=inst)
+
+        #openflow1.0
+        payload = parser.OFPFlowMod(desc,priority=0,match=match,actions=actions)
+
 
 
 
@@ -230,9 +239,9 @@ def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,pa
     if msg_type == ofproto.OFPT_FEATURES_REQUEST:
         #print 'ofp feature request'
         payload = parser.OFPFeaturesRequest(desc)
-    if msg_type == ofproto.OFPT_MULTIPART_REQUEST:
+    '''if msg_type == ofproto.OFPT_MULTIPART_REQUEST:
         #print 'OFPT_MULTIPART_REQUEST'
-        payload = parser.OFPPortDescStatsRequest(desc)
+        payload = parser.OFPPortDescStatsRequest(desc)'''
 
     if msg_type == SEND_LLDP_PACKET:
         pkt = packet.Packet()
@@ -309,7 +318,8 @@ def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,pa
     
 
 class a(app_manager.RyuApp):
-    OFP_VERSIONS = [ofproto_v1_3.OFP_VERSION]
+    OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION,ofproto_v1_3.OFP_VERSION]
+    #OFP_VERSIONS = [ofproto_v1_0.OFP_VERSION]
     def __init__(self, *args, **kwargs):
         super(a, self).__init__(*args, **kwargs)
         self.switches = {}
@@ -485,6 +495,7 @@ class a(app_manager.RyuApp):
                 if ofproto_parser.header(pkt.protocols[-1]):
                     version, msg_type, msg_len, xid = ofproto_parser.header(pkt.protocols[-1])
                     #print 'packet content',version, msg_type, msg_len, xid
+                    #print 'receive msg type:  ',msg_type
                     #fake datapath
                     desc = ofproto_protocol.ProtocolDesc()
                     desc.set_version(version=version)
@@ -511,7 +522,6 @@ class a(app_manager.RyuApp):
                     if msg_type == desc.ofproto.OFPT_PACKET_IN:
                         #print 'openflow packet in'
                         #print pkt
-                        return 
                         #find datapath.id
                         sw_dpid = None
                         for switch in self.switches:
@@ -521,11 +531,30 @@ class a(app_manager.RyuApp):
                                 sw_dpid = switch'''
                         #add seq number to match next packet
                         add_seq = len(bytearray(pkt.protocols[-1]))
-                        self.set_tcp_stat(p.seq,add_seq)
+                        #self.set_tcp_stat(p.seq,add_seq)
                         #print self.switches
 
                         content = desc.ofproto_parser.OFPPacketIn(desc).parser(desc, version, msg_type, msg_len, xid,pkt.protocols[-1])
                         desc_pkt = packet.Packet(content.data)
+                        #print "packet,",desc_pkt
+
+                        desc_pkt_eth = desc_pkt.get_protocol(ethernet.ethernet)
+
+                        packet_in_port = content.in_port
+                        re_pkt = build_tcp_packet(re_pkt,OPFMSG)
+                        ofproto = desc.ofproto
+                        parser = desc.ofproto_parser
+                        
+                        match = desc.ofproto_parser.OFPMatch(dl_dst=haddr_to_bin(desc_pkt_eth.dst))
+                        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
+                        payload = parser.OFPFlowMod(desc,priority=1,match=match,actions=actions)
+                        payload.serialize()
+                        re_pkt.add_protocol(payload.buf)
+                        re_pkt.serialize()
+                        #add_seq = len(bytearray(payload))
+                        self.send_packet_out(datapath,in_port,re_pkt.data)
+
+                        return
                         '''receive lldp packet'''
                         '''if desc_pkt.get_protocol(lldp.lldp):
                             if sw_dpid == None:
@@ -753,7 +782,7 @@ class a(app_manager.RyuApp):
                         self.send_packet_out(datapath,in_port,re_pkt.data)
 
                     '''receive port desc reply'''
-                    if msg_type == desc.ofproto.OFPT_MULTIPART_REPLY:
+                    '''if msg_type == desc.ofproto.OFPT_MULTIPART_REPLY:
                         print 'OFPT_MULTIPART_REPLY'
                         port = desc.ofproto_parser.OFPMultipartReply.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
                         for switch in self.switches:
@@ -774,7 +803,10 @@ class a(app_manager.RyuApp):
                                     if body.port_no != ofproto_v1_3.OFPP_LOCAL:
                                         self.switches[dpid]['port'][body.port_no] = [body.hw_addr,body.name]
                         self.client.set(MEM_KEY,json.dumps(self.switches))
-                        '''add_seq =  len(bytearray(pkt.protocols[-1]))
+                        return
+
+
+                        add_seq =  len(bytearray(pkt.protocols[-1]))
                         self.set_tcp_stat(p.seq,add_seq)
                         msg_type = SEND_LLDP_PACKET
                         add_seq = 0 
@@ -786,7 +818,6 @@ class a(app_manager.RyuApp):
                             add_seq = len(bytearray(OFP_payload))
                             self.send_packet_out(datapath,in_port,re_pkt.data)
                             self.set_tcp_stat(p.seq,add_seq)'''
-                        return
                     '''receive echo request'''
                     if msg_type == desc.ofproto.OFPT_ECHO_REQUEST:
                         reply = desc.ofproto_parser.OFPEchoRequest.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
@@ -808,15 +839,12 @@ class a(app_manager.RyuApp):
                         re_pkt.serialize()
                         add_seq = len(bytearray(OFP_payload))
                         self.send_packet_out(datapath,in_port,re_pkt.data)
-                    if msg_type == desc.ofproto.OFPT_HELLO:
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG,add_seq=add_seq)
-                        msg_type = desc.ofproto.OFPT_FEATURES_REQUEST
-                        OFP_payload = build_OFP_payload(desc,msg_type)
+                        OFP_payload = build_OFP_payload(desc,desc.ofproto.OFPT_FEATURES_REQUEST)
                         re_pkt.add_protocol(OFP_payload)
                         re_pkt.serialize()
                         add_seq = len(bytearray(OFP_payload))
                         self.send_packet_out(datapath,in_port,re_pkt.data)
-                        msg_type = desc.ofproto.OFPT_HELLO
                     #test openflow addflow
                     '''if msg_type == desc.ofproto.OFPT_HELLO:
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG,add_seq=add_seq)
