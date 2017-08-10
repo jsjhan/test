@@ -18,6 +18,7 @@ from ryu.lib.packet import vrrp
 from ryu.lib.packet import in_proto
 from ryu.controller import handler
 from ryu.lib.mac import haddr_to_bin
+from ryu.lib import hub
 import base64
 import random
 import time
@@ -214,16 +215,16 @@ def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,pa
         #print 'ofp flow mod'
         match = parser.OFPMatch()
         #openflow1.3
-        #actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,ofproto.OFPCML_NO_BUFFER)]
+        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER,ofproto.OFPCML_NO_BUFFER)]
         #openflow1.0
-        actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
+        #actions = [parser.OFPActionOutput(ofproto.OFPP_CONTROLLER)]
         
         #openflow1.3
-        #inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,actions)]
-        #payload = parser.OFPFlowMod(desc,priority=0,match=match,instructions=inst)
+        inst = [parser.OFPInstructionActions(ofproto.OFPIT_APPLY_ACTIONS,actions)]
+        payload = parser.OFPFlowMod(desc,priority=0,match=match,instructions=inst)
 
         #openflow1.0
-        payload = parser.OFPFlowMod(desc,priority=0,match=match,actions=actions)
+        #payload = parser.OFPFlowMod(desc,priority=0,match=match,actions=actions)
 
 
 
@@ -335,8 +336,12 @@ class a(app_manager.RyuApp):
         self.test_arp = {}
     def set_tcp_stat(self,cur_seq,cur_ack,add_seq=None,dpid=None):
         #mem_switches = json.loads(self.client.get(MEM_KEY))
+        if dpid:
+            key = MEM_KEY+'-switches'
+        else:
+            key = MEM_KEY
         while True:
-            data_str = self.client.gets(MEM_KEY)
+            data_str = self.client.gets(key)
             if data_str is None:
                 data=[]
                 result=[]
@@ -346,11 +351,13 @@ class a(app_manager.RyuApp):
                     if cur_seq == data[switch]['seq']:
                         data[switch]['seq'] += add_seq
             if dpid:
-                switch = {dpid:[cur_seq,cur_ack]}
-                data.append(switch)
-                print data
+                switch = {dpid}
+                key = MEM_KEY+'-switches'
+                data.append(dpid)
+                #print data
                 data_json = json.dumps(data)
-            if self.client.cas(MEM_KEY,data_json):
+            
+            if self.client.cas(key,data_json):
                 break
         
 
@@ -361,6 +368,19 @@ class a(app_manager.RyuApp):
         ofp_parser = datapath.ofproto_parser
         req = ofp_parser.OFPPortDescStatsRequest(datapath, 0)
         datapath.send_msg(req)
+
+    def mem_alive_handler(self):
+        #self.client.delete(MEM_KEY+'_alive')
+        while(1):
+            #MEM_KEY
+            time = None
+            stats= self.client.get_stats()
+            for item in stats[0]:
+                if 'time' in item:
+                    time = item['time']
+            if time:
+                self.client.set(MEM_KEY+'-alive',time)
+            hub.sleep(1)
 
     @set_ev_cls(ofp_event.EventOFPPortDescStatsReply, MAIN_DISPATCHER)
     def port_stats_reply_handler(self, ev):
@@ -375,6 +395,8 @@ class a(app_manager.RyuApp):
             if p.port_no != ofproto_v1_3.OFPP_LOCAL:
                 self.ports.append([p.port_no, p.hw_addr])
                 temp.append([p.port_no,p.hw_addr])
+        hub.spawn(self.mem_alive_handler)
+            
         #self.switches[datapath.id] = temp
         #self.mac = self.switches[datapath.id][1][1]
         
@@ -523,6 +545,7 @@ class a(app_manager.RyuApp):
                         #print 'openflow packet in'
                         #print pkt
                         #find datapath.id
+                        return
                         sw_dpid = None
                         for switch in self.switches:
                             if p.seq == self.switches[switch]['seq']:
@@ -768,16 +791,17 @@ class a(app_manager.RyuApp):
                         #print 'receive FEATURES_REPLY'
                         reply = desc.ofproto_parser.OFPSwitchFeatures.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
                         #print 'send feature request'
+                        print reply.datapath_id
                         self.set_tcp_stat(cur_seq=p.seq,cur_ack=p.ack,dpid=reply.datapath_id)
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
-                        msg_type = desc.ofproto.OFPT_FLOW_MOD
+                        
                         desc = ofproto_protocol.ProtocolDesc()
                         desc.set_version(version=version)
-                        OFP_payload = build_OFP_payload(desc,msg_type)
+                        OFP_payload = build_OFP_payload(desc,desc.ofproto.OFPT_FLOW_MOD)
                         re_pkt.add_protocol(OFP_payload)
                         #add PACKETIN event to controller
                         re_pkt.serialize()
-                        print 'add packet in rule'       
+                        #print 'add packet in rule'       
                         add_seq = len(bytearray(OFP_payload))
                         self.send_packet_out(datapath,in_port,re_pkt.data)
 
@@ -821,7 +845,7 @@ class a(app_manager.RyuApp):
                     '''receive echo request'''
                     if msg_type == desc.ofproto.OFPT_ECHO_REQUEST:
                         reply = desc.ofproto_parser.OFPEchoRequest.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
-                        print 'echo request'
+                        #print 'echo request'
                         #print reply
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
                         OFP_payload = build_OFP_payload(desc,msg_type)
