@@ -334,23 +334,31 @@ class a(app_manager.RyuApp):
         self.graph = {}
         self.ip_to_switch = {}
         self.test_arp = {}
-    def set_managed_switches(self,dpid,port):
-        key = MEM_KEY+'-switches'
-        while True:
-            data_str = self.client.gets(key)
-            if data_str is None:
-                data=[]
-                result=[]
-            else:
-                data=json.loads(data_str)
-                for item in data:
-                    if dpid in item:
-                        if item[dpid] is not MEM_KEY:
-                            del item[dpid]
-            data.append({dpid:port})
-            data_json = json.dumps(data)
-            if self.client.cas(key,data_json):
-                break
+    def set_managed_switches(self,port):
+        data_str = self.client.gets("port-to-dpid")
+        if data_str is None:
+            return
+        else:
+            port_to_dpid=json.loads(data_str)
+        for item in port_to_dpid:
+            if port == item[0]:
+                myport = item[0]
+                mydpid = item[1]
+        for i in range(1,10):
+            key = 'controller-%d-switches' % i
+            if i == int(MEM_KEY[-1]):
+                continue
+            while True:
+                data_str = self.client.gets(key)
+                if data_str:
+                    data=json.loads(data_str)
+                    if mydpid in item:
+                        print 'you steal dpid'
+                    data_json = json.dumps(data)
+                    if self.client.cas(key,data_json):
+                        break
+                else:
+                    break
 
     def set_port_to_dpid(self,dpid,port):
         while True:
@@ -360,7 +368,7 @@ class a(app_manager.RyuApp):
                 result=[]
             else:
                 data=json.loads(data_str)
-            data.append({dpid:port})
+            data.append([port,dpid])
             data_json = json.dumps(data)
             if self.client.cas("port-to-dpid",data_json):
                 break
@@ -826,9 +834,9 @@ class a(app_manager.RyuApp):
                         #print reply.datapath_id
                         #print cur_ack
                         #self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,dpid=reply.datapath_id)
-                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack)
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,dpid=reply.datapath_id)
                         self.set_port_to_dpid(dpid=reply.datapath_id,port=p.src_port)
-                        self.set_managed_switches(dpid=reply.datapath_id,port=p.src_port)
+                        self.set_managed_switches(port=p.src_port)
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
                         
                         desc = ofproto_protocol.ProtocolDesc()
