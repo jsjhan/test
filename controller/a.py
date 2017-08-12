@@ -197,7 +197,7 @@ def build_new_packet(switch):
 
 
 
-def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,packet=None):
+def build_OFP_payload(desc,msg_type,port_no=0,switch=None,dpid=None,data=None,packet=None,buffer_id=None):
     #openflow hello
     ofproto = desc.ofproto
     parser = desc.ofproto_parser
@@ -334,7 +334,7 @@ class a(app_manager.RyuApp):
         self.graph = {}
         self.ip_to_switch = {}
         self.test_arp = {}
-    def set_tcp_stat(self,cur_seq,cur_ack,add_seq=None,dpid=None):
+    def set_tcp_stat(self,cur_seq,cur_ack,add_seq=0,dpid=None,pre_seq=0,pre_ack=0):
         #mem_switches = json.loads(self.client.get(MEM_KEY))
         if dpid:
             key = MEM_KEY+'-switches'
@@ -347,16 +347,24 @@ class a(app_manager.RyuApp):
                 result=[]
             else:
                 data=json.loads(data_str)
-                for switch in self.switches:
-                    if cur_seq == data[switch]['seq']:
-                        data[switch]['seq'] += add_seq
             if dpid:
                 switch = {dpid}
                 key = MEM_KEY+'-switches'
+                if data:
+                    if dpid in data:
+                        break
                 data.append(dpid)
                 #print data
                 data_json = json.dumps(data)
-            
+            else:
+                #print data
+                '''for pair in data:
+                    if pre_ack in pair:
+                        data.remove(pair)
+                    if pre_seq in pair:
+                        data.remove(pair)'''
+                data.append([cur_seq,cur_ack])
+                data_json = json.dumps(data)
             if self.client.cas(key,data_json):
                 break
         
@@ -492,7 +500,9 @@ class a(app_manager.RyuApp):
         if pkt.get_protocols(tcp.tcp):
             p = pkt.get_protocols(tcp.tcp)[0]
             ip = pkt.get_protocols(ipv4.ipv4)[0]
-            #print pkt
+            print p.seq,p.ack
+            cur_seq = p.seq
+            cur_ack = p.ack
             if p.bits & 0b000010:
                 #receive SYN packet
                 re_pkt = build_tcp_packet(pkt,TCP_REPLY)
@@ -516,6 +526,9 @@ class a(app_manager.RyuApp):
                         print mem_switches'''
                 if ofproto_parser.header(pkt.protocols[-1]):
                     version, msg_type, msg_len, xid = ofproto_parser.header(pkt.protocols[-1])
+                    payload_length = len(bytearray(pkt.protocols[-1]))
+                    #print payload_length
+                    cur_seq = cur_seq+payload_length
                     #print 'packet content',version, msg_type, msg_len, xid
                     #print 'receive msg type:  ',msg_type
                     #fake datapath
@@ -545,22 +558,39 @@ class a(app_manager.RyuApp):
                         #print 'openflow packet in'
                         #print pkt
                         #find datapath.id
-                        sw_dpid = None
-                        for switch in self.switches:
-                            if p.seq == self.switches[switch]['seq']:
-                                sw_dpid = switch
-                            '''if p.src_port == self.switches[switch]['src_port']:
-                                sw_dpid = switch'''
                         #add seq number to match next packet
                         add_seq = len(bytearray(pkt.protocols[-1]))
                         #self.set_tcp_stat(p.seq,add_seq)
                         #print self.switches
-
                         content = desc.ofproto_parser.OFPPacketIn(desc).parser(desc, version, msg_type, msg_len, xid,pkt.protocols[-1])
                         desc_pkt = packet.Packet(content.data)
                         #print "packet,",desc_pkt
 
                         desc_pkt_eth = desc_pkt.get_protocol(ethernet.ethernet)
+                        print content
+
+
+                        '''test code two port switch'''
+                        packet_in_port = content.match['in_port']
+                        buffer_id = content.buffer_id
+                        print buffer_id
+                        print type(buffer_id)
+                        if int(packet_in_port) == 1:
+                            re_pkt = build_tcp_packet(re_pkt,OPFMSG)
+                            OFP_payload = build_OFP_payload(desc,SEND_PACKET_OUT,port_no=2,data=content.data)
+                            re_pkt.add_protocol(OFP_payload)
+                            re_pkt.serialize()
+                            add_seq = len(bytearray(OFP_payload))
+                            self.send_packet_out(datapath,in_port,re_pkt.data)                    
+                        else:
+                            re_pkt = build_tcp_packet(re_pkt,OPFMSG)
+                            OFP_payload = build_OFP_payload(desc,SEND_PACKET_OUT,port_no=1,data=content.data)
+                            re_pkt.add_protocol(OFP_payload)
+                            re_pkt.serialize()
+                            add_seq = len(bytearray(OFP_payload))
+                            self.send_packet_out(datapath,in_port,re_pkt.data)                    
+    
+                        return
 
                         '''receive lldp packet'''
                         '''if desc_pkt.get_protocol(lldp.lldp):
@@ -627,13 +657,6 @@ class a(app_manager.RyuApp):
                             desc_pkt_arp = desc_pkt.get_protocol(arp.arp)
                             packet_in_port = content.match['in_port']
                             
-
-                            for switch in self.switches:
-                                if p.seq == self.switches[switch]['seq']:
-                                    sw_dpid = switch
-
-
-
 
                             msg_type = ARP_DROP_PACKET
                             re_pkt = build_tcp_packet(re_pkt,OPFMSG)
@@ -769,8 +792,9 @@ class a(app_manager.RyuApp):
                     if msg_type == desc.ofproto.OFPT_FEATURES_REPLY:
                         #print 'receive FEATURES_REPLY'
                         reply = desc.ofproto_parser.OFPSwitchFeatures.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
-                        print reply.datapath_id
-                        self.set_tcp_stat(cur_seq=p.seq,cur_ack=p.ack,dpid=reply.datapath_id)
+                        #print reply.datapath_id
+                        #print cur_ack
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,dpid=reply.datapath_id)
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
                         
                         desc = ofproto_protocol.ProtocolDesc()
@@ -782,18 +806,23 @@ class a(app_manager.RyuApp):
                         #print 'add packet in rule'       
                         add_seq = len(bytearray(OFP_payload))
                         self.send_packet_out(datapath,in_port,re_pkt.data)
-                       
-                        add_seq = len(bytearray(OFP_payload)) 
+                        cur_ack = cur_ack+add_seq
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,pre_seq=p.seq,pre_ack=p.ack)
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG,add_seq=add_seq)
                         OFP_payload = build_OFP_payload(desc,desc.ofproto.OFPT_MULTIPART_REQUEST)
+                        add_seq = len(bytearray(OFP_payload)) 
                         re_pkt.add_protocol(OFP_payload)
                         re_pkt.serialize()
                         self.send_packet_out(datapath,in_port,re_pkt.data)
+
+                        cur_ack = cur_ack+add_seq
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,pre_seq=p.seq,pre_ack=p.ack)
                         return
                     '''receive port desc reply'''
                     if msg_type == desc.ofproto.OFPT_MULTIPART_REPLY:
                         print 'OFPT_MULTIPART_REPLY'
                         port = desc.ofproto_parser.OFPMultipartReply.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=p.ack,pre_seq=p.seq,pre_ack=p.ack) 
                         #print port
                         return
                     '''receive echo request'''
@@ -801,13 +830,15 @@ class a(app_manager.RyuApp):
                         reply = desc.ofproto_parser.OFPEchoRequest.parser(desc,version,msg_type,msg_len,xid,pkt.protocols[-1])
                         #print 'echo request'
                         #print reply
+                        #print p.seq,p.ack
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
                         OFP_payload = build_OFP_payload(desc,msg_type)
                         re_pkt.add_protocol(OFP_payload)
                         re_pkt.serialize()
                         add_seq = len(bytearray(pkt.protocols[-1]))
                         self.send_packet_out(datapath,in_port,re_pkt.data)
-                        #self.set_tcp_stat(cur_seq=p.seq,add_seq)
+                        cur_ack = cur_ack+add_seq
+                        self.set_tcp_stat(cur_seq=cur_seq,cur_ack=cur_ack,pre_seq=p.seq,pre_ack=p.ack)
                         return
                     if msg_type == desc.ofproto.OFPT_HELLO:
                         re_pkt = build_tcp_packet(re_pkt,OPFMSG)
